@@ -1,6 +1,6 @@
 """Football Data Multi Coordinator voor Home Assistant."""
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 import asyncio
 import aiohttp
 
@@ -20,6 +20,18 @@ _LOGGER = logging.getLogger(__name__)
 # tegelijk (21 aanroepen x 6.5s ~= 137s, ruim binnen de standaard
 # update_interval van 300s).
 REQUEST_DELAY_SECONDS = 6.5
+
+# (2026-08-31) football-data.org's "status=LIVE" filter is een shorthand
+# voor IN_PLAY/PAUSED. Op de gratis laag komt het voor dat een wedstrijd
+# die allang is afgelopen serverside niet (op tijd) wordt omgezet naar
+# FINISHED, waardoor hij in deze filter oneindig als "Live"/"Rust" is
+# blijven staan (bijv. een wedstrijd van gisteravond die vandaag nog als
+# lopend werd getoond). Een normale voetbalwedstrijd (incl. rust en
+# blessuretijd) duurt nooit langer dan zo'n 2,5 uur; MAX_LIVE_MATCH_AGE
+# geeft nog wat extra marge en wordt gebruikt om zulke verouderde entries
+# er client-side uit te filteren, ongeacht wat de API zelf nog als status
+# doorgeeft.
+MAX_LIVE_MATCH_AGE = timedelta(hours=3, minutes=30)
 
 class FootballDataCoordinator(DataUpdateCoordinator):
     """Haalt data op van meerdere Football-Data.org competities."""
@@ -69,13 +81,55 @@ class FootballDataCoordinator(DataUpdateCoordinator):
             # REQUEST_DELAY_SECONDS hierboven.
             await asyncio.sleep(REQUEST_DELAY_SECONDS)
 
+    @staticmethod
+    def _filter_stale_live_matches(code, raw_matches):
+        """Filtert wedstrijden eruit die te oud zijn om nog echt live te kunnen zijn.
+
+        Zie MAX_LIVE_MATCH_AGE hierboven voor de reden: de API zelf zet een
+        wedstrijd soms niet op tijd naar FINISHED, dus we vertrouwen niet
+        blind op de status=LIVE-filter van football-data.org.
+        """
+        now = datetime.now(timezone.utc)
+        filtered = []
+        for m in raw_matches:
+            utc_date_str = m.get("utcDate")
+            kickoff = None
+            if utc_date_str:
+                try:
+                    kickoff = datetime.fromisoformat(utc_date_str.replace("Z", "+00:00"))
+                except ValueError:
+                    kickoff = None
+
+            if kickoff is None:
+                # Kan de datum niet parsen: liever tonen dan onterecht wegfilteren.
+                filtered.append(m)
+                continue
+
+            age = now - kickoff
+            if age <= MAX_LIVE_MATCH_AGE:
+                filtered.append(m)
+            else:
+                _LOGGER.warning(
+                    "Live-wedstrijd %s - %s (aftrap %s, status %s) genegeerd voor "
+                    "competitie %s: %s oud, waarschijnlijk niet tijdig door de API "
+                    "op FINISHED gezet.",
+                    m.get("homeTeam", {}).get("name"),
+                    m.get("awayTeam", {}).get("name"),
+                    utc_date_str,
+                    m.get("status"),
+                    code,
+                    age,
+                )
+        return filtered
+
     async def _fetch_competition_data(self, session, code):
         """Haalt data op voor één competitie."""
         _LOGGER.info("=== Ophalen data voor competitie %s ===", code)
 
         standings = await self._safe_get(session, f"{BASE_URL}/competitions/{code}/standings")
         live = await self._safe_get(session, f"{BASE_URL}/competitions/{code}/matches?status=LIVE")
-        
+        live_matches = self._filter_stale_live_matches(code, live.get("matches", []))
+
         # Gebruik /competitions/{code}/matches zoals in het werkende testscript
         scheduled = await self._safe_get(session, f"{BASE_URL}/competitions/{code}/matches?status=SCHEDULED")
 
@@ -113,7 +167,7 @@ class FootballDataCoordinator(DataUpdateCoordinator):
 
         result = {
             "standings": total_stand.get("table", []),
-            "live_matches": live.get("matches", []),
+            "live_matches": live_matches,
             "next_match": next_match,
         }
         
