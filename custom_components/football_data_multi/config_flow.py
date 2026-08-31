@@ -71,7 +71,7 @@ class FootballDataFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
     @callback
     def async_get_options_flow(config_entry):
         """Get the options flow for this handler."""
-        return OptionsFlowHandler(config_entry)
+        return OptionsFlowHandler()
 
     async def _test_credentials(self, api_token):
         """Test of de API token geldig is."""
@@ -92,11 +92,16 @@ class FootballDataFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class OptionsFlowHandler(config_entries.OptionsFlow):
-    """Handle options flow voor Football Data Multi."""
+    """Handle options flow voor Football Data Multi.
 
-    def __init__(self, config_entry):
-        """Initialize options flow."""
-        self.config_entry = config_entry
+    (2026-08-31: geen __init__ meer die self.config_entry zelf zet - dat
+    is sinds Home Assistant 2025.12 een alleen-lezen property die de
+    OptionsFlow-basisclass zelf al invult. Zelf toewijzen gaf een 500-fout
+    ("Config flow kon niet geladen worden") zodra je de instellingen van
+    deze integratie probeerde te openen. self.config_entry blijft gewoon
+    bruikbaar in async_step_init hieronder, alleen niet meer handmatig
+    gezet.)
+    """
 
     async def async_step_init(self, user_input=None):
         """Manage the options."""
