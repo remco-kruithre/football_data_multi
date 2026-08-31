@@ -33,6 +33,14 @@ class FootballDataCoordinator(DataUpdateCoordinator):
         )
         self._headers = {"X-Auth-Token": api_token}
         self._competitions = competitions
+        # (2026-08-31) Begin met een lege dict i.p.v. de DataUpdateCoordinator-
+        # default None. Sinds de opstart niet meer wacht op de eerste (trage,
+        # met opzet vertraagde) refresh - zie __init__.py - bestaan de
+        # sensor-entiteiten al vóórdat er ooit data is opgehaald. Hun
+        # `available`-property doet `self.code in self.coordinator.data`,
+        # wat crasht op None maar prima werkt op een lege dict (gewoon False,
+        # entiteit toont "niet beschikbaar" totdat de eerste refresh klaar is).
+        self.data = {}
 
     async def _get_json(self, session, url):
         """Haalt JSON op met foutafhandeling."""
