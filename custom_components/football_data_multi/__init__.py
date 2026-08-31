@@ -24,25 +24,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
 
     # Maak coordinator aan
     coordinator = FootballDataCoordinator(
-        hass, 
-        api_token, 
-        competitions, 
-        update_interval=300  # 5 minuten
+        hass,
+        api_token,
+        competitions,
+        update_interval=1800  # 30 minuten
     )
-    
-    # Eerste refresh
-    await coordinator.async_config_entry_first_refresh()
-    
-    # Debug: log wat er in de data zit
-    _LOGGER.info(f"Coordinator data na eerste refresh: {list(coordinator.data.keys())}")
-    for code, comp_data in coordinator.data.items():
-        next_match = comp_data.get("next_match")
-        if next_match:
-            _LOGGER.info(
-                f"Competitie {code} - Next match: {next_match.get('homeTeam', {}).get('name')} - {next_match.get('awayTeam', {}).get('name')}"
-            )
-        else:
-            _LOGGER.warning(f"Competitie {code} - GEEN next_match gevonden in coordinator data!")
 
     # Sla coordinator op in hass.data
     hass.data.setdefault(DOMAIN, {})
@@ -53,6 +39,27 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
 
     # Luister naar options updates
     entry.async_on_unload(entry.add_update_listener(update_listener))
+
+    # (2026-08-31) GEEN await coordinator.async_config_entry_first_refresh()
+    # meer hier - dat blokkeerde het opstarten van de integratie totdat ALLE
+    # competities zijn opgehaald, en met de rate-limit-pauzes (6,5s na elke
+    # van de 21 aanroepen, ~2+ minuten totaal) duurde dat langer dan de tijd
+    # die Home Assistant een integratie geeft om op te starten, met een
+    # CancelledError als gevolg ("Instellen mislukt"). De sensoren bestaan nu
+    # meteen (tonen "niet beschikbaar" totdat er data is, zie coordinator.py).
+    #
+    # (2026-08-31, 2e poging) hass.async_create_task() bleek NIET voldoende:
+    # die taken worden door Home Assistant nog steeds afgewacht bij een volle
+    # herstart (async_block_till_done() tijdens het opstartproces), waardoor
+    # het "Home Assistant wordt gestart"-scherm alsnog >2 minuten bleef
+    # hangen. entry.async_create_background_task() is de door Home Assistant
+    # bedoelde manier om een taak te starten die het opstart-/afsluitproces
+    # bewust NIET afwacht.
+    entry.async_create_background_task(
+        hass,
+        coordinator.async_refresh(),
+        f"football_data_multi_eerste_refresh_{entry.entry_id}",
+    )
 
     return True
 
