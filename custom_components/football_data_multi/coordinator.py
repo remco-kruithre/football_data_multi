@@ -9,6 +9,18 @@ from .const import BASE_URL
 
 _LOGGER = logging.getLogger(__name__)
 
+# (2026-08-31) De gratis laag van football-data.org staat maximaal 10
+# requests per minuut toe. Deze coordinator doet 3 aanroepen per
+# competitie (standings, live, scheduled); zonder pauze ertussen liep dit
+# bij >=4 competities al tegen de limiet aan, waardoor latere competities
+# in dezelfde update-cyclus een lege/foutieve response terugkregen
+# (zichtbaar als "next_match is NONE or EMPTY" in het logboek, ook al
+# bestond de wedstrijd wel degelijk). 6.5 seconden pauze na elke aanroep
+# houdt het gemiddelde ruim onder de 10/minuut, ook bij alle 7 competities
+# tegelijk (21 aanroepen x 6.5s ~= 137s, ruim binnen de standaard
+# update_interval van 300s).
+REQUEST_DELAY_SECONDS = 6.5
+
 class FootballDataCoordinator(DataUpdateCoordinator):
     """Haalt data op van meerdere Football-Data.org competities."""
 
@@ -43,6 +55,11 @@ class FootballDataCoordinator(DataUpdateCoordinator):
         except UpdateFailed as err:
             _LOGGER.warning("Kon data niet ophalen van %s: %s", url, err)
             return {}
+        finally:
+            # Pauze na ELKE aanroep (geslaagd of niet) om onder de
+            # rate-limit van de gratis API-laag te blijven - zie
+            # REQUEST_DELAY_SECONDS hierboven.
+            await asyncio.sleep(REQUEST_DELAY_SECONDS)
 
     async def _fetch_competition_data(self, session, code):
         """Haalt data op voor één competitie."""
